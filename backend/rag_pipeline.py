@@ -2,7 +2,12 @@ import os
 import time
 import logging
 from typing import List, Optional
-from langchain_community.document_loaders import PyPDFLoader
+try:
+    from langchain_community.document_loaders import PyPDFLoader
+    PDF_LOADER_AVAILABLE = True
+except Exception:
+    PDF_LOADER_AVAILABLE = False
+
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 try:
@@ -56,6 +61,8 @@ class TravelRAGPipeline:
 
     def ingest_pdf(self, file_path: str, city: str, category: str = "general"):
         """Ingest a PDF travel guide into ChromaDB with metadata."""
+        if not PDF_LOADER_AVAILABLE:
+            raise ImportError("PyPDFLoader is not available in this environment. Please run ingestion locally.")
         logger.info(f"Ingesting {file_path} for city={city}")
         loader = PyPDFLoader(file_path)
         documents = loader.load()
