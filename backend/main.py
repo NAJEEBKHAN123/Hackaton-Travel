@@ -140,8 +140,8 @@ def generate_itinerary(request: ItineraryRequest):
 @app.get("/api/destinations")
 def list_destinations():
     """List all cities that have indexed travel guides."""
-    if pipeline is None:
-        raise HTTPException(status_code=503, detail="Pipeline not initialized.")
+    if pipeline is None or pipeline.vector_store is None:
+        return {"destinations": []}
     try:
         collection = pipeline.vector_store._collection
         items = collection.get(include=["metadatas"])

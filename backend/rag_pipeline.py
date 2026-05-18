@@ -5,7 +5,14 @@ from typing import List, Optional
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
-from langchain_chroma import Chroma
+try:
+    from langchain_chroma import Chroma
+    CHROMA_AVAILABLE = True
+except Exception as e:
+    import logging
+    logging.warning(f"ChromaDB not available on this platform/environment: {e}")
+    CHROMA_AVAILABLE = False
+
 from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
 import json
@@ -35,10 +42,17 @@ class TravelRAGPipeline:
         self.vector_store = self._init_vector_store()
 
     def _init_vector_store(self):
-        return Chroma(
-            persist_directory=CHROMA_DIR,
-            embedding_function=self.embeddings
-        )
+        if not CHROMA_AVAILABLE:
+            logger.warning("ChromaDB is not available. Vector store initialization skipped (running in zero-database fallback mode).")
+            return None
+        try:
+            return Chroma(
+                persist_directory=CHROMA_DIR,
+                embedding_function=self.embeddings
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize ChromaDB: {e}. Vector store initialization skipped.")
+            return None
 
     def ingest_pdf(self, file_path: str, city: str, category: str = "general"):
         """Ingest a PDF travel guide into ChromaDB with metadata."""
@@ -84,6 +98,9 @@ class TravelRAGPipeline:
 
     def retrieve_context(self, destination: str, travel_style: str, k: int = 10) -> List:
         """Retrieve relevant travel guide chunks for the destination."""
+        if not self.vector_store:
+            logger.warning("Vector store is not initialized. Falling back to empty context.")
+            return []
         query = f"{destination} travel guide {travel_style} activities sightseeing"
         try:
             # Try metadata-filtered search first
@@ -102,6 +119,8 @@ class TravelRAGPipeline:
 
     def has_documents_for(self, destination: str) -> bool:
         """Check if we have any indexed documents for this destination."""
+        if not self.vector_store:
+            return False
         try:
             results = self.vector_store.similarity_search(
                 destination,
