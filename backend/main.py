@@ -25,17 +25,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize RAG pipeline at startup
 pipeline: Optional[TravelRAGPipeline] = None
 
-@app.on_event("startup")
-async def startup_event():
+def get_pipeline() -> TravelRAGPipeline:
     global pipeline
-    try:
-        pipeline = TravelRAGPipeline()
-        logger.info("RAG Pipeline initialized successfully.")
-    except Exception as e:
-        logger.error(f"Failed to initialize RAG pipeline: {e}")
+    if pipeline is None:
+        try:
+            pipeline = TravelRAGPipeline()
+            logger.info("RAG Pipeline lazy-initialized successfully.")
+        except Exception as e:
+            logger.error(f"Failed to initialize RAG pipeline: {e}")
+            raise HTTPException(status_code=503, detail=f"Failed to initialize RAG pipeline: {e}")
+    return pipeline
 
 
 class ItineraryRequest(BaseModel):
@@ -59,18 +60,23 @@ def root():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "pipeline_ready": pipeline is not None}
+    return {"status": "ok", "pipeline_ready": pipeline is not None or os.getenv("GOOGLE_API_KEY") is not None}
 
 
 @app.post("/api/ingest")
 def ingest_pdf(request: IngestRequest):
     """Ingest a travel guide PDF into the vector store."""
-    if pipeline is None:
-        raise HTTPException(status_code=503, detail="Pipeline not initialized.")
+    try:
+        pipeline_inst = get_pipeline()
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+        
     if not os.path.exists(request.file_path):
         raise HTTPException(status_code=404, detail=f"File not found: {request.file_path}")
     try:
-        count = pipeline.ingest_pdf(request.file_path, request.city, request.category)
+        count = pipeline_inst.ingest_pdf(request.file_path, request.city, request.category)
         return {"message": f"Successfully ingested {count} chunks for '{request.city}'.", "chunks": count}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -79,8 +85,12 @@ def ingest_pdf(request: IngestRequest):
 @app.post("/api/itinerary")
 def generate_itinerary(request: ItineraryRequest):
     """Generate a day-by-day travel itinerary."""
-    if pipeline is None:
-        raise HTTPException(status_code=503, detail="Pipeline not initialized.")
+    try:
+        pipeline_inst = get_pipeline()
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
     duration = max(1, min(7, request.duration))
 
@@ -110,13 +120,13 @@ def generate_itinerary(request: ItineraryRequest):
 
     # 2. Retrieve travel guide context from vector store
     logger.info(f"Retrieving context for {request.destination}, style={request.travel_style}")
-    context_docs = pipeline.retrieve_context(request.destination, request.travel_style, k=12)
-    has_docs = pipeline.has_documents_for(request.destination)
+    context_docs = pipeline_inst.retrieve_context(request.destination, request.travel_style, k=12)
+    has_docs = pipeline_inst.has_documents_for(request.destination)
 
     # 3. Generate itinerary via LLM
     logger.info(f"Generating {duration}-day itinerary...")
     try:
-        itinerary = pipeline.generate_itinerary(
+        itinerary = pipeline_inst.generate_itinerary(
             destination=request.destination,
             duration=duration,
             travel_style=request.travel_style,
@@ -140,10 +150,15 @@ def generate_itinerary(request: ItineraryRequest):
 @app.get("/api/destinations")
 def list_destinations():
     """List all cities that have indexed travel guides."""
-    if pipeline is None or pipeline.vector_store is None:
+    try:
+        pipeline_inst = get_pipeline()
+    except Exception:
+        return {"destinations": []}
+        
+    if pipeline_inst.vector_store is None:
         return {"destinations": []}
     try:
-        collection = pipeline.vector_store._collection
+        collection = pipeline_inst.vector_store._collection
         items = collection.get(include=["metadatas"])
         cities = set()
         for meta in items.get("metadatas", []):
